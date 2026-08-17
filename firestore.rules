@@ -1,0 +1,11 @@
+rules_version = "2";
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Deny all access — aplikasi ini menggunakan Cloudflare Workers + D1
+    // untuk autentikasi, bukan Firestore.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

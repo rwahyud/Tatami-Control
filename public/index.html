@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Tatami Control — Skor Karate</title>
+<meta name="description" content="Aplikasi skor karate realtime: panel kontrol wasit & layar skor lapangan, tersinkron lewat internet.">
+<meta name="theme-color" content="#0b0e11">
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tatami Control">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@400;500;600;700;800&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<!-- Config (API keys & secrets) — load sebelum script lain -->
+<script src="js/config.js"></script>
+<!-- Midtrans Snap (sandbox) — dipakai untuk pembayaran aktivasi -->
+<script>
+  (function() {
+    var s = document.createElement('script');
+    s.src = 'https://app.sandbox.midtrans.com/snap/snap.js';
+    s.setAttribute('data-client-key', CONFIG.MIDTRANS_CLIENT_KEY);
+    document.head.appendChild(s);
+  })();
+</script>
+</head>
+<body>
+
+<div id="splash"><div class="splash-mark"></div></div>
+<div id="toast-wrap" class="toast-wrap"></div>
+<div id="app"></div>
+
+<script src="js/db.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/pwa.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

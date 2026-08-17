@@ -1,0 +1,11 @@
+name = "ypok-auth"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "tc_auth"
+database_name = "tc_auth"
+database_id = "02caabcc-18e8-4800-98a4-13e2559c9e4c"
+
+[observability]
+enabled = true

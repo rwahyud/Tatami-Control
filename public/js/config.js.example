@@ -1,0 +1,24 @@
+/* =====================================================================
+   CONFIG — Tatami Control
+   Copy file ini ke config.js dan isi dengan values yang sesuai.
+   FILE INI TIDAK BOLEH DI-COMMIT KE REPOSITORI.
+   ===================================================================== */
+var CONFIG = {
+  // Midtrans Snap Client Key (sandbox)
+  // Dapatkan dari: https://dashboard.midtrans.com/ → Settings → Access Keys
+  MIDTRANS_CLIENT_KEY: "Mid-client-YOUR_KEY_HERE",
+
+  // Cloudflare Worker URLs
+  // Auth worker: https://ypok-auth.<your-subdomain>.workers.dev
+  // Payment worker: https://ypok-payment.<your-subdomain>.workers.dev
+  AUTH_URL: "https://ypok-auth-YOUR_SUBDOMAIN.workers.dev",
+  PAYMENT_URL: "https://ypok-payment-YOUR_SUBDOMAIN.workers.dev",
+
+  // WhatsApp Admin (format internasional tanpa +)
+  // Contoh: 6281234567890 untuk +62 812-3456-7890
+  WA_ADMIN: "628XXXXXXXXXX",
+
+  // Payment config
+  PAYMENT_NET: 1000000,       // Bersih yang diterima panitia (Rp)
+  PAYMENT_FEE_RATE: 0.007    // Biaya metode pembayaran (0.7%)
+};
