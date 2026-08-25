@@ -48,10 +48,12 @@
     net: CONFIG.PAYMENT_NET, // bersih yang diterima panitia (Rp)
     feeRate: CONFIG.PAYMENT_FEE_RATE, // biaya metode pembayaran (0,7%)
     wa: CONFIG.WA_ADMIN, // WhatsApp admin
-    state: "idle", // idle | creating | open | success | pending | error
+    state: "idle", // idle | creating | open | success | pending | error | register
     order: null, // { order_id, token, amount, net_amount, fee_rate }
     result: null,
-    err: ""
+    err: "",
+    registerErr: "",
+    registerOk: ""
   };
   function payPrice() {
     return Math.ceil(PAY.net / (1 - PAY.feeRate));
@@ -384,7 +386,7 @@
      tampil = net + biaya metode pembayaran). Setelah lunas, bukti
      dikirim ke WhatsApp admin; admin lalu membuatkan akun secara manual. */
   function renderLanding() {
-    if (PAY.state === "success") return renderPaySuccess();
+    if (PAY.state === "success" || PAY.state === "register") return renderRegister();
     if (PAY.state === "pending") return renderPayPending();
     var price = payPrice();
     return (
@@ -408,7 +410,7 @@
       (PAY.state === "creating" ? "Menyiapkan pembayaran…" : "Bayar &amp; Aktifkan") +
       "</button>" +
       (PAY.err ? '<div class="err-msg">' + escHtml(PAY.err) + "</div>" : "") +
-      '<div class="hint" style="text-align:center;margin-top:12px;">Setelah bayar, bukti dikirim ke WhatsApp admin — akunmu dibuatkan lalu kamu bisa masuk.</div>' +
+      '<div class="hint" style="text-align:center;margin-top:12px;">Setelah bayar, kamu bisa langsung buat akun dan login.</div>' +
       "</div>" +
       '<button class="small-btn" id="landing-login" style="display:block;margin:0 auto;">Sudah punya akun? Masuk</button>' +
       '<div class="setup-footer">Tatami Control · panel kontrol wasit &amp; layar skor realtime</div>' +
@@ -416,23 +418,26 @@
     );
   }
 
-  function renderPaySuccess() {
+  function renderRegister() {
     var o = PAY.order || {};
     return (
       '<div class="setup-wrap">' +
       '<div class="brand" style="justify-content:center;">' +
-      '<div style="display:flex;align-items:center;gap:12px;"><div class="brand-mark"></div><div class="brand-text"><div class="eyebrow">Tatami Control</div><h1>Pembayaran Berhasil</h1></div></div>' +
+      '<div style="display:flex;align-items:center;gap:12px;"><div class="brand-mark"></div><div class="brand-text"><div class="eyebrow">Tatami Control</div><h1>Buat Akun</h1></div></div>' +
       "</div>" +
       '<div class="card">' +
-      "<h3 style=\"margin:0 0 8px;\">Terima kasih!</h3>" +
-      '<p style="margin:0 0 12px;font-size:13px;color:var(--text-dim);">Pembayaran sudah diterima. Kirim bukti ini ke WhatsApp admin untuk verifikasi — setelah itu admin akan membuatkan akunmu.</p>' +
-      '<div class="price-box">' +
-      '<div class="price-label">ID Pesanan</div>' +
-      '<div class="price-val" style="font-size:18px;">' + escHtml(o.order_id || "-") + "</div>" +
+      "<h3 style=\"margin:0 0 8px;\">Pembayaran Berhasil!</h3>" +
+      '<p style="margin:0 0 12px;font-size:13px;color:var(--text-dim);line-height:1.65;">' +
+      "ID Pesanan: <b>" + escHtml(o.order_id || "-") + "</b><br>" +
+      "Silakan buat akun untuk masuk ke aplikasi." +
+      "</p>" +
+      '<div class="field"><label>Username</label><input type="text" id="reg-user" placeholder="cth. panitia1" autocomplete="username"></div>' +
+      '<div class="field"><label>Password</label><input type="password" id="reg-pass" placeholder="minimal 4 karakter" autocomplete="new-password"></div>' +
+      '<button class="primary-btn" id="reg-submit" style="margin-top:16px;width:100%;">Buat Akun</button>' +
+      (PAY.registerErr ? '<div class="err-msg">' + escHtml(PAY.registerErr) + "</div>" : "") +
+      (PAY.registerOk ? '<div class="ok-msg">' + escHtml(PAY.registerOk) + "</div>" : "") +
       "</div>" +
-      '<button class="primary-btn" id="wa-send" style="width:100%;margin-top:16px;">Kirim Bukti ke WhatsApp Admin</button>' +
-      '<button class="small-btn" id="landing-login" style="display:block;margin:14px auto 0;">Sudah punya akun? Masuk</button>' +
-      "</div>" +
+      '<button class="small-btn" id="landing-login" style="display:block;margin:0 auto;">Sudah punya akun? Masuk</button>' +
       '<div class="setup-footer">Tatami Control · skor karate langsung</div>' +
       "</div>"
     );
@@ -492,9 +497,8 @@
     window.snap.pay(token, {
       onSuccess: function (result) {
         PAY.result = result;
-        PAY.state = "success";
+        PAY.state = "register";
         render();
-        sendWhatsApp();
       },
       onPending: function (result) {
         PAY.result = result;
@@ -523,9 +527,8 @@
       .then(function (d) {
         var st = d.transaction_status;
         if (st === "settlement" || st === "capture") {
-          PAY.state = "success";
+          PAY.state = "register";
           render();
-          sendWhatsApp();
         } else if (st === "pending" || st === "authorize" || !st) {
           PAY.state = "pending";
           render();
@@ -550,6 +553,60 @@
       "• Total Bayar: " + fmtRupiah(o.amount || payPrice()) + "\n\n" +
       "Mohon diverifikasi dan dibuatkan akunnya. Terima kasih.";
     window.open("https://wa.me/" + PAY.wa + "?text=" + encodeURIComponent(msg), "_blank");
+  }
+
+  /* ================= REGISTER (setelah bayar) ================= */
+  function handleRegister() {
+    var username = (document.getElementById("reg-user") || {}).value || "";
+    var password = (document.getElementById("reg-pass") || {}).value || "";
+    username = username.trim().toLowerCase();
+    PAY.registerErr = "";
+    PAY.registerOk = "";
+
+    if (!username || !password) {
+      PAY.registerErr = "Isi username & password.";
+      render();
+      return;
+    }
+    if (!/^[a-z0-9_.-]{3,20}$/.test(username)) {
+      PAY.registerErr = "Username 3-20 karakter (huruf kecil, angka, _ . -).";
+      render();
+      return;
+    }
+    if (password.length < 4) {
+      PAY.registerErr = "Password minimal 4 karakter.";
+      render();
+      return;
+    }
+
+    var o = PAY.order || {};
+    if (!o.order_id) {
+      PAY.registerErr = "Order ID tidak ditemukan. Muat ulang halaman dan coba lagi.";
+      render();
+      return;
+    }
+
+    fetch(CONFIG.AUTH_URL + "/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: username, password: password, payment_order_id: o.order_id })
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.d.ok) {
+          PAY.registerErr = (res.d && res.d.error) || "Gagal membuat akun.";
+          render();
+          return;
+        }
+        PAY.registerOk = "Akun berhasil dibuat! Silakan login.";
+        PAY.state = "idle";
+        PAY.order = null;
+        render();
+      })
+      .catch(function () {
+        PAY.registerErr = "Gagal terhubung ke server. Coba lagi.";
+        render();
+      });
   }
 
   /* ================= LOGIN VIEW ================= */
@@ -2575,6 +2632,12 @@
     if (waSend) waSend.onclick = sendWhatsApp;
     var payCheck = document.getElementById("pay-check");
     if (payCheck) payCheck.onclick = checkPayment;
+    var regSubmit = document.getElementById("reg-submit");
+    if (regSubmit) regSubmit.onclick = handleRegister;
+    var regUser = document.getElementById("reg-user");
+    var regPass = document.getElementById("reg-pass");
+    if (regPass) regPass.onkeydown = function (e) { if (e.key === "Enter") handleRegister(); };
+    if (regUser) regUser.onkeydown = function (e) { if (e.key === "Enter") handleRegister(); };
     var landingLogin = document.getElementById("landing-login");
     if (landingLogin) {
       landingLogin.onclick = function () {

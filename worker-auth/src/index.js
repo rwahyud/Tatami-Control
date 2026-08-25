@@ -1,12 +1,13 @@
 // ypok-auth — autentikasi akun Tatami Control (Cloudflare Workers + D1)
 // Endpoint:
-//   POST /auth/login   {username, password}      -> {token, user}
-//   GET  /auth/me      (Bearer token)            -> {user}
-//   POST /auth/logout  (Bearer token)            -> {ok}
-//   GET  /auth/users   (Bearer admin)            -> {users}
-//   POST /auth/create  (Bearer admin) {username,password} -> {ok}
-//   POST /auth/reset   (Bearer admin) {username,newPassword} -> {ok}
-//   POST /auth/delete  (Bearer admin) {username} -> {ok}
+//   POST /auth/login     {username, password}                 -> {token, user}
+//   POST /auth/register  {username, password, payment_order_id} -> {ok} (public, setelah bayar)
+//   GET  /auth/me        (Bearer token)                       -> {user}
+//   POST /auth/logout    (Bearer token)                       -> {ok}
+//   GET  /auth/users     (Bearer admin)                       -> {users}
+//   POST /auth/create    (Bearer admin) {username,password}   -> {ok}
+//   POST /auth/reset     (Bearer admin) {username,newPassword} -> {ok}
+//   POST /auth/delete    (Bearer admin) {username}            -> {ok}
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -111,6 +112,49 @@ async function createSession(env, username) {
 }
 
 // ---------- Endpoint handlers ----------
+
+// Register akun baru setelah pembayaran sukses (public, tanpa auth)
+async function handleRegister(request, env) {
+  const body = await readBody(request);
+  if (!body) return json({ ok: false, error: "Body tidak valid." }, 400);
+  const username = String(body.username || "").trim().toLowerCase();
+  const password = String(body.password || "");
+  const paymentOrderId = String(body.payment_order_id || "").trim();
+
+  if (!/^[a-z0-9_.-]{3,20}$/.test(username))
+    return json({ ok: false, error: "Username 3-20 karakter (huruf kecil, angka, _ . -)." }, 400);
+  if (password.length < 4) return json({ ok: false, error: "Password minimal 4 karakter." }, 400);
+  if (!paymentOrderId) return json({ ok: false, error: "Payment order ID wajib diisi." }, 400);
+
+  // Cek apakah username sudah dipakai
+  const exists = await env.tc_auth.prepare("SELECT username FROM users WHERE username = ?1").bind(username).first();
+  if (exists) return json({ ok: false, error: "Username \"" + username + "\" sudah dipakai." }, 409);
+
+  // Cek apakah payment valid dan status = 'paid'
+  const payment = await env.tc_auth
+    .prepare("SELECT order_id, status, username AS paid_username FROM payments WHERE order_id = ?1")
+    .bind(paymentOrderId)
+    .first();
+  if (!payment) return json({ ok: false, error: "Pembayaran tidak ditemukan." }, 404);
+  if (payment.status !== "paid") return json({ ok: false, error: "Pembayaran belum lunas. Status: " + payment.status }, 400);
+  if (payment.paid_username) return json({ ok: false, error: "Pembayaran ini sudah digunakan untuk membuat akun." }, 400);
+
+  // Buat akun
+  const hash = await hashPassword(password);
+  await env.tc_auth
+    .prepare("INSERT INTO users (username, password_hash, role, payment_order_id, created_at) VALUES (?1, ?2, 'pengguna', ?3, ?4)")
+    .bind(username, hash, paymentOrderId, Date.now())
+    .run();
+
+  // Tandai payment sudah dipakai
+  await env.tc_auth
+    .prepare("UPDATE payments SET username = ?1 WHERE order_id = ?2")
+    .bind(username, paymentOrderId)
+    .run();
+
+  return json({ ok: true });
+}
+
 async function handleLogin(request, env) {
   const body = await readBody(request);
   if (!body) return json({ ok: false, error: "Body tidak valid." }, 400);
@@ -179,7 +223,7 @@ async function handleCreate(request, env) {
 
   const hash = await hashPassword(password);
   await env.tc_auth
-    .prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?1, ?2, ?3, ?4)")
+    .prepare("INSERT INTO users (username, password_hash, role, payment_order_id, created_at) VALUES (?1, ?2, ?3, NULL, ?4)")
     .bind(username, hash, "pengguna", Date.now())
     .run();
   return json({ ok: true });
@@ -233,6 +277,7 @@ async function handleRequest(request, env) {
   const path = url.pathname;
   const method = request.method;
 
+  if (method === "POST" && path === "/auth/register") return handleRegister(request, env);
   if (method === "POST" && path === "/auth/login") return handleLogin(request, env);
   if (method === "GET" && path === "/auth/me") return handleMe(request, env);
   if (method === "POST" && path === "/auth/logout") return handleLogout(request, env);

@@ -1,15 +1,17 @@
-// ypok-payment — Payment gateway backend untuk app kejuaraan karate.
+// ypok-payment — Payment gateway backend untuk app Tatami Control.
 // Berjalan di Cloudflare Workers, memakai Midtrans Snap (sandbox default).
 //
 // Endpoint:
-//   POST /create-payment   -> buat transaksi baru, balas { token, redirect_url }
+//   POST /create-payment       -> buat transaksi baru, simpan di D1, balas { token, redirect_url }
 //   GET  /payment-status/:orderId -> tanya status ke Midtrans
-//   POST /webhook          -> notifikasi dari Midtrans (signature diverifikasi)
+//   GET  /payment-info/:orderId   -> cek status pembayaran di D1 (untuk frontend registrasi)
+//   POST /webhook              -> notifikasi dari Midtrans (signature diverifikasi)
 //
 // Konfigurasi via env / secret:
 //   MIDTRANS_SERVER_KEY  (secret, wajib)
 //   MIDTRANS_MODE        "sandbox" (default) | "production"
 //   MIDTRANS_MERCHANT_ID (opsional, dipakai untuk verifikasi webhook)
+//   MIDTRANS_FEE_RATE    (opsional, override default 0.007)
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -103,9 +105,9 @@ async function createPayment(req, env) {
       : [{ id: "reg", price: amount, quantity: 1, name: body.item_name || "Biaya Pendaftaran" }],
     credit_card: { secure: true },
   };
-  if (Array.isArray(body.enable_payments) && body.enable_payments.length) {
-    payload.enable_payments = body.enable_payments;
-  }
+
+  // Batasi metode pembayaran: QRIS + VA saja
+  payload.enable_payments = ["gopay", "shopeepay", "qris", "bri_va", "bca_va", "bni_va", "mandiri_va", "permata_va", "other_va"];
 
   const url = baseUrl(env).snap + "/transactions";
   const resp = await fetch(url, {
@@ -122,6 +124,19 @@ async function createPayment(req, env) {
   if (!resp.ok) {
     return json({ error: "Midtrans: " + JSON.stringify(data), midtrans: data }, resp.status);
   }
+
+  // Simpan payment ke D1
+  try {
+    await env.tc_auth
+      .prepare("INSERT INTO payments (order_id, amount, net_amount, status, created_at) VALUES (?1, ?2, ?3, 'pending', ?4)")
+      .bind(orderId, amount, netAmount || Math.floor(amount * (1 - feeRate(env))), Date.now())
+      .run();
+  } catch (e) {
+    // Kalau D1 error, tetap return token supaya user bisa bayar
+    // Webhook nanti juga bisa update status
+    console.error("D1 insert error:", e);
+  }
+
   return json({
     order_id: orderId,
     token: data.token,
@@ -153,6 +168,19 @@ async function paymentStatus(req, env, orderId) {
   );
 }
 
+async function paymentInfo(req, env, orderId) {
+  try {
+    const row = await env.tc_auth
+      .prepare("SELECT order_id, amount, net_amount, status, created_at, completed_at FROM payments WHERE order_id = ?1")
+      .bind(orderId)
+      .first();
+    if (!row) return json({ error: "Payment tidak ditemukan." }, 404);
+    return json(row);
+  } catch (e) {
+    return internal("Gagal cek payment: " + (e.message || e));
+  }
+}
+
 async function webhook(req, env) {
   let body;
   try {
@@ -173,8 +201,29 @@ async function webhook(req, env) {
     return json({ error: "Unknown merchant" }, 403);
   }
 
-  // Status pembayaran final diambil frontend via /payment-status/:orderId,
-  // jadi webhook cukup membalas 200 setelah verifikasi sukses.
+  // Update status pembayaran di D1
+  const txStatus = body.transaction_status || "";
+  const orderId = body.order_id || "";
+  if (orderId && (txStatus === "settlement" || txStatus === "capture")) {
+    try {
+      await env.tc_auth
+        .prepare("UPDATE payments SET status = 'paid', completed_at = ?1 WHERE order_id = ?2")
+        .bind(Date.now(), orderId)
+        .run();
+    } catch (e) {
+      console.error("D1 update error:", e);
+    }
+  } else if (orderId && (txStatus === "expire" || txStatus === "cancel" || txStatus === "deny")) {
+    try {
+      await env.tc_auth
+        .prepare("UPDATE payments SET status = ?1 WHERE order_id = ?2")
+        .bind(txStatus, orderId)
+        .run();
+    } catch (e) {
+      console.error("D1 update error:", e);
+    }
+  }
+
   return json({
     ok: true,
     order_id: body.order_id,
@@ -186,6 +235,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
+    const method = request.method;
 
     if (request.method === "OPTIONS") {
       return new Response(null, {
@@ -204,18 +254,23 @@ export default {
     }
 
     try {
-      if (request.method === "POST" && path === "/create-payment") {
+      if (method === "POST" && path === "/create-payment") {
         return await createPayment(request, env);
       }
-      if (request.method === "POST" && path === "/webhook") {
+      if (method === "POST" && path === "/webhook") {
         return await webhook(request, env);
       }
-      if (request.method === "GET" && path.startsWith("/payment-status/")) {
+      if (method === "GET" && path.startsWith("/payment-status/")) {
         const orderId = decodeURIComponent(path.slice("/payment-status/".length));
         if (!orderId) return badRequest("orderId wajib diisi");
         return await paymentStatus(request, env, orderId);
       }
-      return json({ error: "Not found", endpoints: ["POST /create-payment", "GET /payment-status/:orderId", "POST /webhook"] }, 404);
+      if (method === "GET" && path.startsWith("/payment-info/")) {
+        const orderId = decodeURIComponent(path.slice("/payment-info/".length));
+        if (!orderId) return badRequest("orderId wajib diisi");
+        return await paymentInfo(request, env, orderId);
+      }
+      return json({ error: "Not found", endpoints: ["POST /create-payment", "GET /payment-status/:orderId", "GET /payment-info/:orderId", "POST /webhook"] }, 404);
     } catch (e) {
       return internal(e && e.message ? e.message : "Internal error");
     }
